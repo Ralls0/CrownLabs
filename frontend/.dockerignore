@@ -2,7 +2,7 @@
 ./package-lock.json
 ./Dockerfile
 ./README.md
-./.storybook
 ./storybook-static
+./build
 ./.dockerignore
 ./.git
