@@ -1,6 +1,7 @@
 const fs = require('fs').promises;
 const { createServer } = require('http');
 const express = require('express');
+const { express: voyagerMiddleware } = require('graphql-voyager/middleware');
 const { ApolloServer } = require('apollo-server-express');
 const compression = require('compression');
 const { createSchema } = require('./schema');
@@ -69,6 +70,7 @@ async function main() {
 
   const app = express();
   app.use(compression());
+  app.use('/voyager', voyagerMiddleware({ endpointUrl: '/' }));
   app.get('/schema', (req, res) => {
     res.setHeader('content-type', 'text/plain');
     res.send(printSchema(schema));
