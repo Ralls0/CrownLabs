@@ -16,6 +16,11 @@ const {
 let cacheSubscriptions = {};
 const TEN_MINUTES = 10 * 60 * 1000;
 
+function getSubQueryList(queryName) {
+  if (queryName.includes("Instance")) return "listCrownlabsPolitoItV1alpha2NamespacedInstance";
+  else return "";
+}
+
 /**
  * Function used to add an enum type in the schema
  * @param {*} baseSchema: The schema that should be extended
@@ -128,7 +133,8 @@ function decorateSubscription(baseSchema, targetType, enumType, kubeApiUrl) {
           async (payload, variables, context, info) => {
             graphqlLogger(`[i] Validate ${info.fieldName} subscription`);
 
-            let subfieldsCheck = false;
+            let fieldsCheck = false;
+            const isList = variables.name === undefined; // FIXME: added
 
             /*
              * Retrieve information about the subscription
@@ -136,6 +142,15 @@ function decorateSubscription(baseSchema, targetType, enumType, kubeApiUrl) {
             const resourceApiMainType = subscriptions.filter(sub => {
               return `${sub.type}Update` === info.fieldName;
             })[0];
+
+            /*
+             * Checking whether the published event is about the main type 
+             */
+            fieldsCheck =
+            fieldsCheck ||
+            (payload.apiObj.metadata.namespace === variables.namespace &&
+              (variables.name === undefined ||
+                payload.apiObj.metadata.name === variables.name));
 
             /*
              * Check if the subscription has some wrapped types.
@@ -147,7 +162,7 @@ function decorateSubscription(baseSchema, targetType, enumType, kubeApiUrl) {
             if (sublabels.length > 0) {
               graphqlLogger(`[i] Search for ${targetType} main query object`);
               const mainQueryObj = baseSchema.getQueryType().getFields()[
-                subQueryType
+                subQueryType // isList ? getSubQueryList(subQueryType) : subQueryType
               ];
               if (!mainQueryObj) throw new Error('Query object not found');
 
@@ -167,29 +182,47 @@ function decorateSubscription(baseSchema, targetType, enumType, kubeApiUrl) {
               graphqlLogger(
                 `[i] Checking whether watched object is the main query object`
               );
-              subfieldsCheck =
-                subfieldsCheck ||
-                (payload.apiObj.metadata.namespace === variables.namespace &&
-                  (variables.name === undefined ||
-                    payload.apiObj.metadata.name === variables.name));
 
-              if (!subfieldsCheck) {
+              /*
+               * If the published event is not about the main type
+               * recursively checks whether wrapped types match
+               */
+              if (!fieldsCheck) {
                 let targetObjField;
 
                 fieldWrapper.forEach(fw => {
-                  targetObjField = getQueryField(newApiObj, fw);
-                  if (typeof targetObjField === 'object') {
-                    subfieldsCheck =
-                      subfieldsCheck ||
-                      (targetObjField.namespace ===
-                        payload.apiObj.metadata.namespace &&
-                        (targetObjField.name === undefined ||
-                          targetObjField.name ===
-                            payload.apiObj.metadata.name));
+                  if (isList) {
+                    /*
+                     * The function getQueryField() retrieve the wrapper type
+                     * in the query object for a given wrapped type
+                     */
+                    for(let item of newApiObj.items) {
+                      targetObjField = getQueryField(item, fw);
+                      if (typeof targetObjField === 'object') {
+                        fieldsCheck =
+                          fieldsCheck ||
+                          (targetObjField.namespace ===
+                            payload.apiObj.metadata.namespace &&
+                            (targetObjField.name === undefined ||
+                              targetObjField.name ===
+                                payload.apiObj.metadata.name));
+                      }
+                    }
+                  } else {
+                    targetObjField = getQueryField(newApiObj, fw);
+                    if (typeof targetObjField === 'object') {
+                      fieldsCheck =
+                        fieldsCheck ||
+                        (targetObjField.namespace ===
+                          payload.apiObj.metadata.namespace &&
+                          (targetObjField.name === undefined ||
+                            targetObjField.name ===
+                              payload.apiObj.metadata.name));
+                    }
                   }
                 });
               }
-              if (subfieldsCheck) payload.apiObj = newApiObj;
+              if (fieldsCheck) payload.apiObj = newApiObj;
             }
 
             /*
@@ -197,10 +230,7 @@ function decorateSubscription(baseSchema, targetType, enumType, kubeApiUrl) {
              * So, the new values are sent on the WebSocket to the client
              */
             return (
-              subfieldsCheck &&
-              payload.apiObj.metadata.namespace === variables.namespace &&
-              (variables.name === undefined ||
-                payload.apiObj.metadata.name === variables.name) &&
+              fieldsCheck &&
               checkPermission(
                 context.token,
                 resourceApiMainType.group,
